@@ -46,6 +46,9 @@ class Result:
     note: str = ""  # why a FAILED/NEEDS_ATTENTION result ended that way
     # Per-grain outcome: grain -> "verified" | "discrepancy" | "unknown".
     grain_results: dict[str, str] = field(default_factory=dict)
+    # Redundancy findings: pairs of grain expressions that produced identical
+    # buckets, e.g. [{"grain_a", "grain_b", "note"}]. (Devin only; empty in fake.)
+    redundancies: list[dict] = field(default_factory=list)
 
     @property
     def discrepancies(self) -> list[str]:
@@ -56,14 +59,17 @@ def _grain_results(work_item: WorkItem, session: Session) -> dict[str, str]:
     """Derive per-grain results from the session's structured output.
 
     Live sessions return per-grain verdicts; the fake path returns none, so
-    every grain is reported as verified (plumbing proven, no findings claimed).
+    every grain is reported as "unknown" (plumbing proven, no verdict claimed).
+    Devin keys its grains uppercase ("WEEK"); our work items are lowercase, so
+    normalize before lookup or every live verdict is silently dropped.
     """
     reported = (session.structured_output or {}).get("grains", {})
+    reported = {k.upper(): v for k, v in reported.items()}
     results: dict[str, str] = {}
     for grain in work_item.grains:
-        entry = reported.get(grain)
+        entry = reported.get(grain.upper())
         if entry is None:
-            results[grain] = VERIFIED
+            results[grain] = "unknown"  # never claim a verdict we didn't get
         else:
             results[grain] = entry.get("status", "unknown")
     return results
@@ -100,6 +106,7 @@ def run(
     client: DevinClient,
     work_items: list[WorkItem],
     github: GitHubClient | None = None,
+    run_id: str | None = None,
     poll_interval: float = 0.0,
     max_polls: int = 200,
     blocked_patience: int = 12,
@@ -132,11 +139,17 @@ def run(
             except Exception as exc:  # noqa: BLE001 - isolation
                 print(f"  WARN: failed to file issue for {item.engine}: {exc}")
 
+        # Idempotency OFF: Devin keys idempotency on the PROMPT, which is identical
+        # every run, so idempotent=True would re-attach to a prior (even terminated)
+        # session. We always want fresh sessions per run. The run_id rides along as
+        # a tag purely as a label, so you can find a run's sessions in the Devin UI.
         tags = [f"engine:{item.engine}", "devin-driver"]
+        if run_id:
+            tags.append(f"run:{run_id}")
         session = client.create_session(
             prompt=prompts.build_prompt(item.engine, item.grains),
             tags=tags,
-            idempotent=True,
+            idempotent=False,
             structured_output_schema=prompts.STRUCTURED_OUTPUT_SCHEMA,
         )
         sessions[session.session_id] = session
@@ -194,7 +207,16 @@ def run(
 
             status = session.status_enum
 
-            if status == FINISHED:
+            # A real session opens its PR and writes verdicts, then parks in
+            # `blocked` ("awaiting instructions") before it ever reaches
+            # `finished`. Capture that delivered work regardless of status —
+            # but require grains (real verdicts), so a still-working draft PR
+            # with no verdicts is not finalized early and no matrix is faked.
+            delivered = bool(session.pull_request_url) and bool(
+                (session.structured_output or {}).get("grains")
+            )
+
+            if status == FINISHED or delivered:
                 result = Result(
                     engine=item.engine,
                     grains=item.grains,
@@ -202,6 +224,7 @@ def run(
                     session_url=session.url,
                     pull_request_url=session.pull_request_url,
                     grain_results=_grain_results(item, session),
+                    redundancies=list((session.structured_output or {}).get("redundancies") or []),
                 )
                 pr = session.pull_request_url or "(no PR)"
                 finalize(session_id, result, f"Verified — PR: {pr}")
@@ -234,6 +257,7 @@ def run(
                             grains=item.grains,
                             status=NEEDS_ATTENTION,
                             session_url=session.url,
+                            pull_request_url=session.pull_request_url,
                             note="still blocked after nudge + grace window",
                             grain_results={g: "unknown" for g in item.grains},
                         ),

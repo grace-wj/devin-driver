@@ -24,6 +24,7 @@ GRAINS: tuple[str, ...] = (
 
 # Engines to verify. SQLite is the zero-infra, guaranteed-green substrate;
 # Postgres adds the cross-dialect dimension (e.g. WEEK starts Monday vs Sunday).
+# Add "postgresql" for the cross-dialect dimension (e.g. WEEK Monday vs Sunday).
 ENGINES: tuple[str, ...] = ("sqlite", "postgresql")
 
 

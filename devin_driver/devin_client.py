@@ -188,6 +188,12 @@ class LiveDevinClient(DevinClient):
         if structured_output_schema:
             payload["structured_output_schema"] = structured_output_schema
         data = self._post("/sessions", payload)
+        if data.get("is_new_session") is False:
+            print(
+                f"  WARN: Devin reused an EXISTING session {data.get('session_id')} "
+                f"(is_new_session=false) — idempotency matched a prior request; "
+                f"this run may be polling stale work."
+            )
         return Session(session_id=data["session_id"], url=data.get("url", ""))
 
     def get_session(self, session_id: str) -> Session:

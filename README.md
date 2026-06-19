@@ -105,7 +105,7 @@ Each run prints:
 
 - the **scan** (the JSON work-list of engines × grains),
 - a **funnel**: enumerated → issues filed → launched → verified / failed /
-  needs-attention, plus PRs opened and discrepancies surfaced,
+  needs-attention, plus PRs opened, discrepancies, and redundancies surfaced,
 - the **engine × grain matrix** (`OK` verified / `!!` discrepancy / `??`
   unknown) — the headline visual,
 - the **per-engine trail**: each engine's status, issue url, PR url, and a note

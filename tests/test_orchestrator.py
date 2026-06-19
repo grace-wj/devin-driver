@@ -68,6 +68,114 @@ def test_failed_path_is_devin_failure_not_needs_attention():
 # --- Error-isolation contracts (clients that throw) ---
 
 
+class _StructuredOutputClient:
+    """Finishes immediately, returning a canned structured_output (mimics a live
+    Devin verdict) so we can prove the harness surfaces discrepancies + redundancies."""
+
+    def __init__(self, structured_output):
+        self._so = structured_output
+
+    def create_session(self, *a, **k):
+        return Session(session_id="s1", url="u")
+
+    def get_session(self, session_id):
+        from devin_driver.devin_client import FINISHED
+
+        return Session(
+            session_id=session_id,
+            url="u",
+            status_enum=FINISHED,
+            pull_request_url="pr",
+            structured_output=self._so,
+        )
+
+    def send_message(self, session_id, message):
+        pass
+
+
+def test_structured_output_surfaces_discrepancy_and_redundancy():
+    so = {
+        "engine": "sqlite",
+        "reference": "ISO-8601: week starts Monday",
+        # Devin keys grains UPPERCASE — mirror the real payload so this test
+        # actually guards the case-normalization in _grain_results.
+        "grains": {
+            "DAY": {"status": "verified"},
+            "WEEK": {"status": "discrepancy", "note": "engine WEEK starts Sunday"},
+        },
+        "redundancies": [
+            {"grain_a": "WEEK", "grain_b": "WEEK_STARTING_SUNDAY", "note": "identical buckets"}
+        ],
+    }
+    results = orchestrator.run(_StructuredOutputClient(so), _items("sqlite"), poll_interval=0.0)
+    r = results[0]
+    assert r.status == VERIFIED
+    assert r.grain_results["week"] == "discrepancy"  # divergence from ISO reference surfaces
+    assert "week" in r.discrepancies
+    assert len(r.redundancies) == 1  # redundancy captured structurally, not just in prose
+
+
+class _ParkedBlockedClient:
+    """Mimics the real lifecycle: a session that opens its PR and writes verdicts
+    but parks in `blocked` ("awaiting instructions") instead of going `finished`.
+    Optionally has no structured_output (a draft PR with no verdicts yet)."""
+
+    def __init__(self, structured_output):
+        self._so = structured_output
+        self.send_message_calls = 0
+
+    def create_session(self, *a, **k):
+        return Session(session_id="s1", url="u")
+
+    def get_session(self, session_id):
+        from devin_driver.devin_client import BLOCKED
+
+        return Session(
+            session_id=session_id,
+            url="u",
+            status_enum=BLOCKED,  # never reaches `finished` during the window
+            pull_request_url="pr",
+            structured_output=self._so,
+        )
+
+    def send_message(self, session_id, message):
+        self.send_message_calls += 1
+
+
+def test_parked_blocked_with_pr_and_verdicts_is_verified():
+    """The bug that bit the live run: a delivered session parked in `blocked`
+    must be captured as VERIFIED with its real verdicts, and never nudged."""
+    so = {
+        "engine": "sqlite",
+        "grains": {
+            "DAY": {"status": "verified"},
+            "WEEK": {"status": "discrepancy", "note": "Sunday-start"},
+        },
+    }
+    client = _ParkedBlockedClient(so)
+    results = orchestrator.run(
+        client, _items("sqlite"), poll_interval=0.0, blocked_patience=12
+    )
+    r = results[0]
+    assert r.status == VERIFIED
+    assert r.pull_request_url == "pr"
+    assert r.grain_results["week"] == "discrepancy"  # the red cell survives
+    assert client.send_message_calls == 0  # delivered work is never nudged
+
+
+def test_blocked_with_pr_but_no_verdicts_is_not_fabricated():
+    """A draft PR with no verdicts must NOT be finalized as verified (no faked
+    green matrix); it degrades to needs_attention but still surfaces the PR."""
+    client = _ParkedBlockedClient(structured_output=None)
+    results = orchestrator.run(
+        client, _items("sqlite"), poll_interval=0.0, blocked_patience=3
+    )
+    r = results[0]
+    assert r.status == NEEDS_ATTENTION
+    assert r.status != VERIFIED
+    assert r.pull_request_url == "pr"  # PR surfaced, not silently lost
+
+
 class _NudgeRaisesClient:
     """Wraps a blocked-forever fake; its send_message raises every time."""
 

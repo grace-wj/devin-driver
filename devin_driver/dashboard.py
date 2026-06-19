@@ -20,6 +20,7 @@ def render(results: list[Result], grains: tuple[str, ...] = GRAINS) -> None:
     issues_filed = sum(1 for r in results if r.issue_url)
     with_pr = sum(1 for r in results if r.pull_request_url)
     discrepancies = sum(len(r.discrepancies) for r in results)
+    redundancies = sum(len(r.redundancies) for r in results)
 
     print("\n=== Funnel ===")
     print(f"  engines enumerated : {launched}")
@@ -30,6 +31,7 @@ def render(results: list[Result], grains: tuple[str, ...] = GRAINS) -> None:
     print(f"  needs attention    : {needs_attention}")
     print(f"  PRs opened         : {with_pr}")
     print(f"  discrepancies      : {discrepancies}")
+    print(f"  redundancies       : {redundancies}")
 
     print("\n=== Engine x Grain matrix ===")
     header = "  " + f"{'engine':12s}" + "".join(f"{g[:5]:>7s}" for g in grains)

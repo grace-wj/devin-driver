@@ -11,6 +11,7 @@ identical for fake and live; DEVIN_MODE selects which client is used.
 from __future__ import annotations
 
 import json
+import uuid
 
 from devin_driver import dashboard, orchestrator, scanner
 from devin_driver.config import load_config
@@ -20,7 +21,11 @@ from devin_driver.github_client import make_github_client
 
 def main() -> None:
     config = load_config()
-    print(f"Devin Driver — mode={config.mode}")
+    # A fresh id per process invocation. It rides along in each session's tags so
+    # Devin's idempotency never matches a PRIOR run — every `python main.py`
+    # spawns brand-new sessions, even with identical prompts.
+    run_id = uuid.uuid4().hex[:8]
+    print(f"Devin Driver — mode={config.mode}  run={run_id}")
 
     work_items = scanner.scan()
     print("\n=== Scan (work-list) ===")
@@ -36,7 +41,7 @@ def main() -> None:
 
     print("\n=== Launching sessions ===")
     results = orchestrator.run(
-        client, work_items, github=github, poll_interval=poll_interval
+        client, work_items, github=github, run_id=run_id, poll_interval=poll_interval
     )
 
     dashboard.render(results)
