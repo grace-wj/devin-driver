@@ -3,4 +3,5 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
-CMD ["python", "main.py"]   # adjust to your real entrypoint later
+# entrypoint — rename when you build the orchestrator
+CMD ["python", "main.py"]
